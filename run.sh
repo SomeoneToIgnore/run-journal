@@ -9,7 +9,7 @@ absolute() {
     echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 }
 
-PROMPT="$(absolute "${1:-$SCRIPT_DIR/prompts/chat.md}")"
+PROMPT="$(absolute "${1:-$SCRIPT_DIR/prompts/agent.md}")"
 JOURNAL="$(absolute "${2:-$SCRIPT_DIR/$(basename "${PROMPT%.md}").db}")"
 
 if [ -z "${RUNVIL_GATEWAY_URL:-}" ]; then
@@ -26,6 +26,17 @@ if [ -z "${RUNVIL_PLUGINS+set}" ] && [ -d "$WORKSHOP/plugins" ]; then
     export RUNVIL_PLUGINS="$WORKSHOP/plugins"
 elif [ -z "${RUNVIL_PLUGINS:-}" ]; then
     unset RUNVIL_PLUGINS
+fi
+
+if [ -z "${RUNVIL_FILES+set}" ] && [ -n "${HOME:-}" ] && [ -d "$HOME/Downloads" ]; then
+    RUNVIL_FILES="$HOME/Downloads"
+fi
+
+if [ -n "${RUNVIL_FILES:-}" ]; then
+    files="$(cd "$RUNVIL_FILES" && pwd)"
+    export RUNVIL_FILES="$files"
+else
+    unset RUNVIL_FILES
 fi
 
 cd "$SCRIPT_DIR"

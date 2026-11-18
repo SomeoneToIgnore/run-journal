@@ -32,6 +32,9 @@ todos:
   - id: step10-home
     content: "Step 10: choose the crate's repository and name"
     status: pending
+  - id: step11-tools
+    content: "Step 11: real files and web pages for the command-line Host"
+    status: completed
 isProject: false
 ---
 
@@ -43,7 +46,7 @@ This plan keeps a journal of the run in a file and resumes the run from it in a 
 Nothing is restored: the run starts again from its first line, and every answer it had comes back from the journal instead of from a model or a tool.
 The Engine is deterministic for the same inputs, so the run reaches the state it had.
 
-Steps 1 to 5 are built and pass their checks.
+Steps 1 to 5 and step 11 are built and pass their checks.
 Steps 6 to 10 are open.
 
 ## Notes
@@ -51,18 +54,20 @@ Steps 6 to 10 are open.
 - Repository: `/Users/someonetoignore/work/cppalliance/run-journal`, a Rust workspace of two crates.
   Every path in this plan is relative to its root, unless the text names another repository.
 - Crates: `crates/run-journal` is the library, and `crates/resumable` is the command-line Host.
-- The Harness: `runvil` and `harness-gateway-client` come from `cppalliance/runvil-harness` at `db4cf1f4` (`Cargo.toml` lines 13 and 14).
+- The Harness: `runvil`, `harness-gateway-client`, and `plugin-web` come from `cppalliance/runvil-harness` at `db4cf1f4` (`Cargo.toml` lines 13 to 15).
   Harness paths in this plan are relative to that repository at that commit.
 - Toolchain: Rust 1.99 (`rust-toolchain.toml`), as the Harness pins.
 - Build: `cargo build --workspace`.
 - Tests: `cargo test --workspace`.
 - Lint: `cargo clippy --workspace --all-targets`.
-  The lint table follows the Harness's (`Cargo.toml` lines 21 to 41).
+  The lint table follows the Harness's (`Cargo.toml` lines 22 to 42).
   It leaves out `missing_docs`, the three rustdoc lints, the three `disallowed_*` lints, and the three lints about unsafe code beside `unsafe_code`.
   It allows `missing_errors_doc` and `missing_panics_doc`, because the code has no doc comments.
 - Format: `cargo fmt --all --check`.
 - Run: `./run.sh [prompt.md] [journal.db]`.
-  With no arguments it runs `prompts/chat.md` over `chat.db` in the root.
+  With no arguments it runs `prompts/agent.md` over `agent.db` in the root, with `~/Downloads` mounted read-only.
+  `RUNVIL_FILES=<directory>` before the command mounts that directory instead, and an empty `RUNVIL_FILES` mounts none.
+  `./run.sh prompts/chat.md` runs the same conversation with no tools, over `chat.db`.
 - The code has no comments, by its owner's rule.
   This plan holds the reasons.
 
@@ -163,6 +168,23 @@ Steps 6 to 10 are open.
   A line typed during the replay would arrive as a message the journal does not hold.
   When its input ends and the run waits, it exits and leaves the run open.
   Ctrl-C leaves the run open too, because nothing cancels it.
+- **One real directory is mounted read-only at its own path.**
+  The path the operator types, the path the model gives a tool, and the path on the disk are then one path.
+  The rest of the run's files stay in memory, so a real path outside the directory reads as not found.
+  Workshop's demo mounts are built the same way (`runvil-workshop/crates/workshop/server/src/agents/language_guide.rs` lines 62 to 65).
+  The directory is the run's first workspace root, so a prompt reads it from `ui().workspace_root`.
+- **The journal does not store the mount.**
+  A replayed tool answer comes from the journal, so the replay reads no real file and fetches no page.
+  A resume takes `RUNVIL_FILES` from its own command, and the comparison refuses a resume whose prompt names another directory.
+- **The web Pack is linked into the command-line Host.**
+  `plugin-web` is a crate of the Harness repository, and Workshop links it the same way (`runvil-workshop/crates/workshop/server/src/agents.rs` line 172).
+  A fetch leaves from the command-line Host's own process, and a search goes through the Gateway.
+- **`run.sh` gives a run real files and web pages by default.**
+  With no prompt named, it runs `prompts/agent.md`.
+  With `RUNVIL_FILES` not set, it mounts `~/Downloads` when that directory exists.
+  A set `RUNVIL_FILES` is left as it is, and an empty one mounts nothing, as an empty `RUNVIL_PLUGINS` loads nothing.
+  The command-line Host has no default of its own: it mounts only the directory that `RUNVIL_FILES` names.
+  The limit on a mounted directory and `web/fetch` in one run is therefore the default case.
 
 ## Limits
 
@@ -176,6 +198,12 @@ Steps 6 to 10 are open.
 | The model catalog                                              | Another model is bound                                                                                         | Later rounds go to that model                    | Reasoned           |
 | The run's files and the shell session                          | They live in memory                                                                                            | A file the run wrote is gone                     | Seen in a real run |
 | The journal is read whole at a resume                          | Memory grows with the run                                                                                      | A slow start for a long run                      | Reasoned           |
+| A mounted directory and `web/fetch` in one run, the default    | Text in a file or a page directs the model to put a file's content into a URL                                  | Any file under the mount can leave the machine   | Reasoned           |
+| A real file or a page that changed since it was read           | The replay gives back the content the journal holds                                                            | The model works from the old content             | Seen in a real run |
+| A resume whose mount differs from the first start's            | The system message that names the directory differs                                                            | The resume is refused, and the journal is intact | Seen in a real run |
+| `RUNVIL_FILES` on Windows                                      | The resolved path does not start with `/`                                                                      | The start is refused with the reason             | Reasoned           |
+| A line half typed when other output or the prompt is printed   | The terminal does not echo the first half again                                                                | The two halves are on two rows, live only        | Seen in a real run |
+| A reply with a line that starts with a role                    | Any line after the first of any reply; the text is printed as the model gave it                                | That line reads as another role's                | Reasoned           |
 
 ## Steps
 
@@ -221,7 +249,11 @@ The journal must then hold the same records as the first run, and the resumed ru
 ### Step 5, done: the command-line Host and `run.sh`
 
 - `crates/resumable/src/main.rs` resumes the journal's unfinished run or starts a new one, and reads the operator's lines from its input.
-- `crates/resumable/src/screen.rs` prints each message and reply, replayed or live.
+- `crates/resumable/src/screen.rs` prints each message, reply, and tool result under its role, replayed or live: `user> `, `assistant> `, and `tool> ` with the tool's alias.
+  When the input and the output are both a terminal, it prints `user> ` as a prompt when the run waits, and the terminal's own echo completes the line.
+  A line typed before the run waits is printed again under `user> ` when the run takes it.
+  In every other case the whole line is printed when its message arrives, so a replay and a pipe show the same text as a terminal.
+  Output that arrives while the prompt is open ends the prompt's row first, and the prompt is printed again after it.
 - `RUNVIL_GATEWAY_URL` and `RUNVIL_GATEWAY_API_KEY` name the Gateway, `RUNNER_MODEL` selects a model, and `RUNVIL_PLUGINS` names a directory of library Plugins.
 - `run.sh` fills those from the Workshop checkout beside this repository.
   It asks `runvil-gateway diagnostics` first and stops when no Gateway runs, because `--print-url` with no Gateway becomes one and never returns.
@@ -254,6 +286,21 @@ The journal must then hold the same records as the first run, and the resumed ru
 - Its name must not start with `runvil-` or `harness-`, which mean the Engine and the Harness.
 - The Harness holds no database, so the crate is a Host's library wherever it lands.
 
+### Step 11, done: real files and web pages
+
+- `RUNVIL_FILES` names one directory.
+  `crates/resumable/src/main.rs` resolves it, mounts it read-only at its resolved path over the in-memory root, and makes it the run's first workspace root (lines 174 to 198).
+- The same file installs the web Pack with the runtime's handle and the Gateway's search (lines 210 to 231).
+  With no Gateway named, the Pack is unavailable, and a prompt that requires it is refused.
+- `prompts/agent.md` offers `std/read`, `std/dir`, `std/grep`, and `web/fetch`, and names the directory in a system message.
+  It offers no `web/search`, because the Gateway answers a search only when its `gateway.toml` has `[tools.web_search]`.
+- `run.sh` makes `RUNVIL_FILES` absolute before it changes directory.
+- `run.sh` runs `prompts/agent.md` when no prompt is named (line 12), and mounts `~/Downloads` when `RUNVIL_FILES` is not set and that directory exists (lines 31 to 33).
+- `prompts/files.md` is removed.
+  It offered the whole std Pack, which adds to the three tools of `prompts/agent.md` only the four that answer "not implemented".
+- Covered by `a_mounted_directory_is_read_only_at_its_own_path` (`crates/resumable/src/main.rs` line 292).
+  The library is unchanged.
+
 ## Verification
 
 Run on 2026-11-18:
@@ -265,8 +312,43 @@ Run on 2026-11-18:
   The third answered 94 when asked to double the number the first was told.
 - A resume with no new input replayed that conversation in 0.03 s, with no model round.
 - With the std Plugin loaded, a run of three tool calls, one of them an error, replayed in 0.04 s.
-- `run.sh` started a run, resumed it, ran `prompts/files.md` from another directory, and refused to start while no Gateway ran.
+- `run.sh` started a run, resumed it, ran `prompts/files.md`, since removed, from another directory, and refused to start while no Gateway ran.
 - Typing at a terminal is not checked; every run above read its lines from a pipe.
+
+Run on 2026-11-18, for step 11:
+
+- The same three commands pass, with 9 scenarios and 2 unit tests.
+- One deliberate breakage failed the new test: mounting the directory writable.
+- Through `run.sh`, the same model read a real file and named the codename in it.
+- The file was then changed, and the resume printed the old codename, read a link that leaves the directory and got a refusal, and fetched `https://example.com` and named its title.
+- A resume with no new input replayed those three tool calls and took 2.3 s through `run.sh`, with `cargo run` and the two questions to the Gateway included.
+- A resume with another directory, and one with none, each stopped at record 9 with both records named, and the next resume with the first directory passed.
+- A prompt with no model called the tools from Lua: `std/dir`, `std/grep`, and `std/read` answered inside the directory, and a `..` path, the link, `/etc/hosts`, and the link's target each read as refused or not found.
+- A copy of a journal that an earlier build wrote for `prompts/chat.md` resumed under this build.
+- `web/search` is not checked beyond the Gateway's refusal: this machine's Gateway has no search configured.
+
+Run on 2026-11-18, for the roles on the screen:
+
+- The same three commands pass, with 9 scenarios and 4 unit tests.
+- Four deliberate breakages each failed a test: a typed line shown twice, no wake after an interrupted prompt, a prompt without a terminal, and a reply with no role.
+- Through `run.sh` at a pseudo-terminal, the same model answered a line typed at the prompt and a line typed while it worked, and a blank line and the end of the input each ended the prompt's row.
+- The resume of that run showed the same blocks under the same roles from a pipe, at a pseudo-terminal, and with the output in a file.
+- `prompts/agent.md` showed `tool> Read` between the message and the reply, live and resumed.
+- A prompt whose second task answers while the first waits ended the open prompt's row, printed the reply, and printed the prompt again.
+- A copy of this repository's `chat.db`, which an earlier build wrote, resumed with 8 `user> ` and 8 `assistant> ` blocks, as many as its `inbox_message` and `assistant_reply` records.
+- A line half typed when the reply arrived was split over two rows live, and its resume showed it whole.
+- A person at a real terminal is not checked; a script typed every line above.
+
+Run on 2026-11-18, for the defaults of `run.sh`:
+
+- No Rust file changed, and the same three commands pass, with 9 scenarios and 4 unit tests.
+- `run.sh` with no argument and no `RUNVIL_FILES`, started from another directory, named `~/Downloads` as the real files and opened `agent.db` in the root.
+- Through `run.sh` with no `RUNVIL_FILES`, the same model listed `~/Downloads` and answered 5, the count `ls -A` gives, and fetched `https://github.com/SomeoneToIgnore/`.
+- The resume of that run replayed both tool calls, a resume with an empty `RUNVIL_FILES` stopped at record 9 with both records named, and the next resume with the default passed.
+- A copy of this repository's `chat.db` resumed under `prompts/chat.md` with `~/Downloads` mounted, and with no mount.
+- With a stub in place of `cargo`, `run.sh` mounted nothing for an empty `RUNVIL_FILES`, for a home with no `Downloads`, and for no `HOME`, and it made a relative `RUNVIL_FILES` absolute.
+- With an empty `RUNVIL_PLUGINS`, `prompts/agent.md` was refused with "std is unavailable: runvil/std is not installed".
+- A person at a real terminal is not checked; a pipe gave every line above.
 
 ## Out of scope
 
@@ -274,8 +356,9 @@ Run on 2026-11-18:
 - Steering from the command line: a line typed while the run works waits for the run's next wait.
 - More than one unfinished run in a journal.
 - Trimming or compacting a journal.
+- Writes to real files, and more than one mounted directory.
 
-### Open questions
+## Open questions
 
 - Should store operations be replayed from the journal instead of performed again?
   They are performed again now, which rebuilds the store, and their answers are compared.
@@ -289,4 +372,6 @@ Run on 2026-11-18:
 - The Harness records no stop, so a replay can only infer one.
 - With no model selected, the Harness binds the first model the broker lists (`crates/harness-internal/runner/src/environment.rs` lines 37 to 39).
 - `runvil-gateway --print-url` with no Gateway running starts one on the operator's state directory and never returns.
-- The std Plugin that Workshop pins answers `Write` and `StrReplace` with "not implemented", so the files prompt can list and read, and cannot write.
+- The std Plugin that Workshop pins answers `Write`, `StrReplace`, `Delete`, and `Glob` with "not implemented" (`runvil-plugin-std` at `782ad23e`, `crates/plugin-std/src/pack.rs` lines 97 to 102), so a prompt can list, read, and search, and cannot write.
+- The Gateway answers `POST /v1/tools/web_search` with 404 and "tool not configured: web_search" until its `gateway.toml` has `[tools.web_search]`.
+- A refused link is named by its path below the mount, as in "/link.txt escapes the mounted root", not by the path the model gave.

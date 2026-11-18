@@ -2471,6 +2471,7 @@ name = "resumable"
 version = "0.1.0"
 dependencies = [
  "harness-gateway-client",
+ "plugin-web",
  "run-journal",
  "runvil",
  "serde_json",
