@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "BSL-1.0"
+publish = false
+
+[workspace.dependencies]
+run-journal = { path = "crates/run-journal" }
+runvil = { git = "https://github.com/cppalliance/runvil-harness", rev = "db4cf1f4adbda68ca7ed8a22fa8df794110b5d97" }
+harness-gateway-client = { git = "https://github.com/cppalliance/runvil-harness", rev = "db4cf1f4adbda68ca7ed8a22fa8df794110b5d97" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+turso = { version = "=0.7.2", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+future_incompatible = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "warn"
+todo = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+exit = "deny"
+doc_markdown = "allow"
+assert_is_empty = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
