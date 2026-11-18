@@ -219,11 +219,6 @@ impl Phase {
         };
         let script = Arc::new(script);
         let reads = Arc::new(AtomicUsize::new(0));
-        let host = session
-            .host(desk(&reads), finder(source), Arc::new(Clock { now }))
-            .unwrap();
-        let host = Arc::new(host);
-        let prompt = host.parse(PROMPT).unwrap();
         let setup = session.setup(script.clone());
         let tee = Arc::new(Tee::new(Arc::clone(&setup.recorder)));
         let setup = RunSetup {
@@ -231,7 +226,9 @@ impl Phase {
             has_user: true,
             ..setup
         };
-        let harness = session.harness(host, prompt, setup);
+        let harness = session
+            .harness(desk(&reads), finder(source), Arc::new(Clock { now }), setup)
+            .unwrap();
         Phase {
             control: harness.control(),
             session: Some(session),

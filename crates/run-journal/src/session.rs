@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::future::pending;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use runvil::harness::{InferenceBroker, Packs, Record, RecordKind, RunId, Timer};
 use runvil::plugin::PackRegistry;
-use runvil::{
-    Error, Harness, Host, Prompt, PromptFinder, RunControl, RunSetup, Timestamp, ToolInfo,
-};
+use runvil::{Error, Harness, Host, PromptFinder, RunControl, RunSetup, Timestamp, ToolInfo};
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::watch;
@@ -15,7 +14,7 @@ use crate::answer;
 use crate::broker::JournalBroker;
 use crate::db::{Db, Stored};
 use crate::journal::Launch;
-use crate::normalize::{normalize, render};
+use crate::normalize::normalize;
 use crate::packs;
 use crate::recorder::JournalRecorder;
 use crate::timer::JournalTimer;
@@ -31,19 +30,6 @@ impl Session {
         &self.shared.launch
     }
 
-    pub fn host(
-        &self,
-        packs: PackRegistry,
-        prompts: Arc<dyn PromptFinder>,
-        timer: Arc<dyn Timer>,
-    ) -> Result<Host, Error> {
-        Ok(Host {
-            packs: Packs::new(packs::wrap(&self.shared, packs)?),
-            prompts,
-            timer: Arc::new(JournalTimer::new(Arc::clone(&self.shared), timer)),
-        })
-    }
-
     #[must_use]
     pub fn setup(&self, broker: Arc<dyn InferenceBroker>) -> RunSetup {
         RunSetup {
@@ -56,11 +42,22 @@ impl Session {
         }
     }
 
-    #[must_use]
-    pub fn harness(&self, host: Arc<Host>, prompt: Arc<Prompt>, setup: RunSetup) -> Harness {
-        let harness = Harness::new(host, prompt, setup);
+    pub fn harness(
+        &self,
+        packs: PackRegistry,
+        prompts: Arc<dyn PromptFinder>,
+        timer: Arc<dyn Timer>,
+        setup: RunSetup,
+    ) -> Result<Harness, Error> {
+        let host = Host {
+            packs: Packs::new(packs::wrap(&self.shared, packs)?),
+            prompts,
+            timer: Arc::new(JournalTimer::new(Arc::clone(&self.shared), timer)),
+        };
+        let prompt = host.parse(&self.shared.launch.prompt)?;
+        let harness = Harness::new(Arc::new(host), prompt, setup);
         self.shared.state().control = Some(harness.control());
-        harness
+        Ok(harness)
     }
 
     #[must_use]
@@ -320,15 +317,38 @@ impl Shared {
         }
     }
 
-    pub(crate) fn stash(&self, key: Key, answer: Option<Value>) {
-        if let Some(answer) = answer {
-            self.state().stash.insert(key, answer);
-        }
-    }
-
-    pub(crate) fn stop(&self) {
-        if let Some(control) = &self.state().control {
-            control.stop_round();
+    pub(crate) async fn answer<Answer, Live>(
+        &self,
+        claim: Claim,
+        stored: impl FnOnce(Option<&Value>, &Value) -> Answer,
+        live: impl FnOnce() -> Live,
+        full: impl FnOnce(&Answer) -> Option<Value>,
+    ) -> Answer
+    where
+        Live: Future<Output = Answer>,
+    {
+        match claim {
+            Claim::Stored {
+                turn,
+                payload,
+                answer,
+            } => {
+                self.turn(turn).await;
+                stored(answer.as_ref(), &payload)
+            }
+            Claim::Dropped { turn } => {
+                self.turn(turn).await;
+                self.stop();
+                pending().await
+            }
+            Claim::Live { key } => {
+                self.live().await;
+                let answer = live().await;
+                if let Some(key) = key {
+                    self.stash(key, full(&answer));
+                }
+                answer
+            }
         }
     }
 
@@ -337,12 +357,30 @@ impl Shared {
         let _ = progress.wait_for(|progress| progress.cursor >= turn).await;
     }
 
+    pub(crate) async fn live(&self) {
+        if !self.replayed().await {
+            pending::<()>().await;
+        }
+    }
+
     pub(crate) async fn replayed(&self) -> bool {
         let mut progress = self.progress.subscribe();
         progress
             .wait_for(|progress| progress.settled())
             .await
             .is_ok_and(|progress| !progress.diverged)
+    }
+
+    fn stash(&self, key: Key, answer: Option<Value>) {
+        if let Some(answer) = answer {
+            self.state().stash.insert(key, answer);
+        }
+    }
+
+    fn stop(&self) {
+        if let Some(control) = &self.state().control {
+            control.stop_round();
+        }
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -466,6 +504,8 @@ impl State {
     }
 }
 
+const SHOWN: usize = 200;
+
 fn key(record: &Record) -> Key {
     (record.task_id.clone(), record.task_seq)
 }
@@ -475,4 +515,18 @@ fn message(old: &Old) -> bool {
     record.kind == RecordKind::Event
         && record.task_id == "0"
         && record.payload.get("kind").and_then(Value::as_str) == Some("inbox_message")
+}
+
+fn render(record: &Record) -> String {
+    let payload = record.payload.to_string();
+    let shown = match payload.char_indices().nth(SHOWN) {
+        Some((end, _)) => format!("{}...", &payload[..end]),
+        None => payload,
+    };
+    format!(
+        "{} {}:{} {shown}",
+        record.kind.as_str(),
+        record.task_id,
+        record.task_seq
+    )
 }

@@ -1,4 +1,3 @@
-use runvil::harness::Record;
 use serde_json::Value;
 
 pub(crate) fn normalize(value: &mut Value) {
@@ -10,25 +9,9 @@ pub(crate) fn normalize(value: &mut Value) {
     }
 }
 
-pub(crate) fn render(record: &Record) -> String {
-    let payload = record.payload.to_string();
-    let shown = match payload.char_indices().nth(SHOWN) {
-        Some((end, _)) => format!("{}...", &payload[..end]),
-        None => payload,
-    };
-    format!(
-        "{} {}:{} {shown}",
-        record.kind.as_str(),
-        record.task_id,
-        record.task_seq
-    )
-}
-
 const GUARD: &str = "untrusted_input_";
 
 const NONCE: usize = 32;
-
-const SHOWN: usize = 200;
 
 fn scrub(text: &str) -> String {
     let mut scrubbed = String::with_capacity(text.len());

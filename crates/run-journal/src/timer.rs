@@ -1,11 +1,10 @@
-use std::future::pending;
 use std::sync::Arc;
 use std::time::Duration;
 
 use runvil::harness::Timer;
 use runvil::{BoxFuture, Timestamp};
 
-use crate::session::{Claim, Shared};
+use crate::session::Shared;
 
 pub(crate) struct JournalTimer {
     shared: Arc<Shared>,
@@ -23,20 +22,9 @@ impl Timer for JournalTimer {
         let shared = Arc::clone(&self.shared);
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
-            match shared.claim_timer(duration.as_secs_f64()) {
-                Claim::Stored { turn, .. } => shared.turn(turn).await,
-                Claim::Dropped { turn } => {
-                    shared.turn(turn).await;
-                    shared.stop();
-                    pending::<()>().await;
-                }
-                Claim::Live { .. } => {
-                    if !shared.replayed().await {
-                        pending::<()>().await;
-                    }
-                    inner.sleep(duration).await;
-                }
-            }
+            let claim = shared.claim_timer(duration.as_secs_f64());
+            let live = || inner.sleep(duration);
+            shared.answer(claim, |_, _| {}, live, |()| None).await;
         })
     }
 

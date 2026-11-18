@@ -25,6 +25,7 @@ use runvil::vfs::{RealBackend, VfsRef, Writability};
 use runvil::{BoxFuture, Error, ErrorCode, RunReport, RunSetup};
 use serde_json::Value;
 use tokio::runtime::Handle;
+use tokio::signal;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::screen::Screen;
@@ -60,17 +61,11 @@ async fn run(journal: &Path, prompt: &Path) -> Result<ExitCode, Failure> {
     let (vfs, workspace_roots) = files()?;
     let gateway = gateway()?;
     let session = open(journal, name).await?;
-    let host = session.host(
-        packs(gateway.clone())?,
-        Arc::new(move |name: &str| find(&folder, name)),
-        Arc::new(Clock),
-    )?;
-    let host = Arc::new(host);
-    let parsed = host.parse(&session.launch().prompt)?;
-    let setup = session.setup(broker(gateway));
+    let setup = session.setup(broker(gateway.clone()));
+    let terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
     let screen = Arc::new(Screen::new(
         Arc::clone(&setup.recorder),
-        io::stdin().is_terminal() && io::stdout().is_terminal(),
+        terminal,
         Box::new(print),
     ));
     let setup = RunSetup {
@@ -80,13 +75,20 @@ async fn run(journal: &Path, prompt: &Path) -> Result<ExitCode, Failure> {
         workspace_roots,
         ..setup
     };
-    let harness = session.harness(host, parsed, setup);
+    let harness = session.harness(
+        packs(gateway)?,
+        Arc::new(move |name: &str| find(&folder, name)),
+        Arc::new(Clock),
+        setup,
+    )?;
     let control = harness.control();
     let mut lines = lines();
+    let mut interrupts = interrupts();
     let mut waiting = screen.waiting();
     let mut settled = false;
     let mut caught_up = false;
     let mut open = true;
+    let mut stopping = false;
     let report = harness.run();
     let replayed = session.replayed();
     tokio::pin!(report, replayed);
@@ -112,7 +114,22 @@ async fn run(journal: &Path, prompt: &Path) -> Result<ExitCode, Failure> {
                 }
                 None => open = false,
             },
+            Some(()) = interrupts.recv() => {
+                if !screen.interrupt() && terminal {
+                    eprintln!();
+                }
+                if !caught_up || stopping || *waiting.borrow() {
+                    eprintln!("the run stays open; run the same command to resume it");
+                    return Ok(ExitCode::from(130));
+                }
+                stopping = true;
+                control.stop_round();
+                eprintln!("stopping the reply; press Ctrl-C again to exit");
+            }
             changed = waiting.changed() => changed?,
+        }
+        if *waiting.borrow() {
+            stopping = false;
         }
         if caught_up && !open && *waiting.borrow() {
             screen.interrupt();
@@ -168,6 +185,12 @@ fn lines() -> UnboundedReceiver<String> {
             }
         }
     });
+    receiver
+}
+
+fn interrupts() -> UnboundedReceiver<()> {
+    let (sender, receiver) = unbounded_channel();
+    tokio::spawn(async move { while signal::ctrl_c().await.is_ok() && sender.send(()).is_ok() {} });
     receiver
 }
 

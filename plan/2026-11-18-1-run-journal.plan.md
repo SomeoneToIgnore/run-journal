@@ -35,6 +35,9 @@ todos:
   - id: step11-tools
     content: "Step 11: real files and web pages for the command-line Host"
     status: completed
+  - id: step12-stop
+    content: "Step 12: stop a reply from the command line, and keep the run when a reply ends early"
+    status: completed
 isProject: false
 ---
 
@@ -46,7 +49,7 @@ This plan keeps a journal of the run in a file and resumes the run from it in a 
 Nothing is restored: the run starts again from its first line, and every answer it had comes back from the journal instead of from a model or a tool.
 The Engine is deterministic for the same inputs, so the run reaches the state it had.
 
-Steps 1 to 5 and step 11 are built and pass their checks.
+Steps 1 to 5, 11, and 12 are built and pass their checks.
 Steps 6 to 10 are open.
 
 ## Notes
@@ -67,7 +70,7 @@ Steps 6 to 10 are open.
 - Run: `./run.sh [prompt.md] [journal.db]`.
   With no arguments it runs `prompts/agent.md` over `agent.db` in the root, with `~/Downloads` mounted read-only.
   `RUNVIL_FILES=<directory>` before the command mounts that directory instead, and an empty `RUNVIL_FILES` mounts none.
-  `./run.sh prompts/chat.md` runs the same conversation with no tools, over `chat.db`.
+  Ctrl-C stops a reply, and the line `/draw` logs a number from `math.random`.
 - The code has no comments, by its owner's rule.
   This plan holds the reasons.
 
@@ -89,9 +92,9 @@ Steps 6 to 10 are open.
 
 1. The Host opens the journal and asks for its unfinished run (`crates/run-journal/src/journal.rs` lines 30 to 35).
 2. `Journal::resume` reads the run's records and builds a `Session` (lines 53 to 70).
-3. The Host builds its `Host`, its `RunSetup`, and its `Harness` through the session (`crates/run-journal/src/session.rs` lines 34 to 64).
+3. The Host builds its `RunSetup` and its `Harness` through the session, which builds the `Host` itself (`crates/run-journal/src/session.rs` lines 33 to 61).
 4. The Harness runs the prompt from its first line.
-5. Each record the run produces is compared with the journal's record at the cursor (`session.rs` lines 208 to 249).
+5. Each record the run produces is compared with the journal's record at the cursor (`session.rs` lines 205 to 246).
 6. Each effect that has an answer in the journal gets that answer at its turn.
 7. Each effect that has no answer in the journal waits for the replay to end, and then it is performed.
 8. A difference stops the run with an error that names both records, and the journal stays as it was.
@@ -141,18 +144,18 @@ Steps 6 to 10 are open.
   It is the one defense against a changed prompt, a changed Pack, or a wrong pairing.
 - **The guard nonce is blanked before the comparison.**
   The Harness draws a new seed for every run (`crates/harness-internal/runner/src/prepare.rs` line 46), and the nonce derives from the seed.
-  The 32 digits after `untrusted_input_` are blanked on both sides (`crates/run-journal/src/normalize.rs` lines 27 to 53).
+  The 32 digits after `untrusted_input_` are blanked on both sides (`crates/run-journal/src/normalize.rs` lines 12 to 36).
   Step 6 removes this.
 - **A message is sent again when the cursor reaches its event.**
   An `inbox_message` on task `0` is always a message the Host sent, as the Harness's own plan says (`plan/2026-11-08-2-run-inbox-user-pack.plan.md` line 237).
-  Messages that follow each other are sent together (`session.rs` lines 450 to 466).
+  Messages that follow each other are sent together (`session.rs` lines 488 to 504).
 - **A stop is inferred, not stored.**
   The Harness records no stop, only the dropped answers it causes.
   When a dropped effect's turn comes and the Harness has not dropped it, the replay raises a stop.
   A drop the Engine causes never reaches that point, because the Harness aborts the call before it polls it again (`effect_loop.rs` lines 416 to 421).
 - **A run that ends during the replay stays open.**
   A Gateway that is down ends the run before its first step.
-  The recorder refuses that end, so the journal keeps the run for a later resume (`session.rs` lines 190 to 206).
+  The recorder refuses that end, so the journal keeps the run for a later resume (`session.rs` lines 187 to 203).
 - **One journal, one unfinished run.**
   `Journal::unfinished` returns the latest run when it has no end.
   The command-line Host resumes it and refuses a prompt of another name.
@@ -167,7 +170,23 @@ Steps 6 to 10 are open.
 - **The command-line Host forwards a line only while the run waits.**
   A line typed during the replay would arrive as a message the journal does not hold.
   When its input ends and the run waits, it exits and leaves the run open.
-  Ctrl-C leaves the run open too, because nothing cancels it.
+- **Ctrl-C stops the reply, and Ctrl-C again leaves the run.**
+  While the run works, the first Ctrl-C calls `RunControl::stop_round`, which drops the round or the tool calls in flight and lets the run go on (`crates/resumable/src/main.rs` lines 117 to 128).
+  A Ctrl-C during the replay, while the run waits, or after a stop that has not yet made the run wait exits with code 130 and leaves the run open.
+  The Host raises no stop during the replay, because the journal would not hold it.
+  The journal stores no stop: the dropped answer replays it.
+  A line typed before the Ctrl-C waits in the Host, and it is sent when the run waits again.
+- **The prompt catches the failure of a reply and logs its code.**
+  A stop raises an error with the code `canceled` at `models.loop`, and the round cap raises one with the code `tool_loop_exhausted`.
+  Uncaught, each ends the run, and a run that ended cannot resume.
+  `prompts/agent.md` calls `models.loop` under `pcall`, as Workshop's chat prompt does (`runvil-workshop/crates/workshop/agents/agents/chat.md` line 52), and gives the error's code to `log` (lines 48 to 51).
+  The screen shows each `log` line under `note> `, live and replayed (`crates/resumable/src/screen.rs` lines 77 to 83).
+  The next message starts another `models.loop` call, with its own 24 rounds.
+- **`/draw` in `prompts/agent.md` shows what `math.random` does to a resume.**
+  The line `/draw` is not sent to the model: the prompt logs one number from `math.random` (lines 44 to 45).
+  Lua seeds its generator in each process, so the replay logs another number, and the resume is refused at that record.
+  A number that the model makes up is part of its answer, so it replays from the journal and shows nothing of this limit.
+  A prompt that needs draws that replay seeds the generator from `sys.when`, the run's start time, which the journal gives back on a resume: `math.randomseed(tonumber((sys.when:gsub('%D', ''))))`.
 - **One real directory is mounted read-only at its own path.**
   The path the operator types, the path the model gives a tool, and the path on the disk are then one path.
   The rest of the run's files stay in memory, so a real path outside the directory reads as not found.
@@ -185,6 +204,15 @@ Steps 6 to 10 are open.
   A set `RUNVIL_FILES` is left as it is, and an empty one mounts nothing, as an empty `RUNVIL_PLUGINS` loads nothing.
   The command-line Host has no default of its own: it mounts only the directory that `RUNVIL_FILES` names.
   The limit on a mounted directory and `web/fetch` in one run is therefore the default case.
+- **`prompts/agent.md` fetches the whole page when the article is thin.**
+  `web/fetch` returns the main article of a page, and renders the whole page only when the article is under 100 bytes (`crates/plugin-web/src/response.rs` lines 15 and 162).
+  For `https://github.com/SomeoneToIgnore` the article is 235 characters about one pinned repository, and the name and the place are only in the whole page.
+  The prompt offers `web_fetch`, a tool in Lua that calls `web/fetch` (`prompts/agent.md` lines 14 to 35).
+  It calls `web/fetch` again with `raw` when the first answer is an article that is not cut and has at most 2000 characters, its envelope included.
+  The system message tells the model to ask for `raw` itself when a longer article lacks what it looks for, and not to repeat a call.
+  The directory and this text are one system message, because a model's chat template can refuse a second one; that refusal is not checked.
+  A failure of `web/fetch` returns to the model as untrusted text, as it does when the model calls the Pack's tool.
+  An error that a Lua tool raises ends `models.loop` instead, and with it the reply (`decisions/tools-and-packs.md`, "A failing adhoc handler raises at `models.loop`").
 
 ## Limits
 
@@ -193,7 +221,7 @@ Steps 6 to 10 are open.
 | Effects in flight at the exit are performed again              | 10 tool calls, the default cap (`crates/harness-internal/runner/src/setup.rs` line 16), plus rounds and timers | A tool that is not idempotent runs twice         | Test, for a round  |
 | A message or a stop that arrived in the same wake as an answer | The replay orders them the other way                                                                           | The resume is refused, and the journal is intact | Reasoned           |
 | Untrusted text that quotes the run's own nonce                 | The records differ after blanking                                                                              | The resume is refused                            | Reasoned           |
-| `math.random` in a prompt                                      | Lua draws its own seed in each process                                                                         | The resume is refused when a record changes      | Reasoned           |
+| `math.random` in a prompt                                      | Lua draws its own seed in each process                                                                         | The resume is refused when a record changes      | Seen in a real run |
 | Two calls alike in one round                                   | Paired by issue order                                                                                          | Each gets its own answer                         | Test               |
 | The model catalog                                              | Another model is bound                                                                                         | Later rounds go to that model                    | Reasoned           |
 | The run's files and the shell session                          | They live in memory                                                                                            | A file the run wrote is gone                     | Seen in a real run |
@@ -202,6 +230,14 @@ Steps 6 to 10 are open.
 | A real file or a page that changed since it was read           | The replay gives back the content the journal holds                                                            | The model works from the old content             | Seen in a real run |
 | A resume whose mount differs from the first start's            | The system message that names the directory differs                                                            | The resume is refused, and the journal is intact | Seen in a real run |
 | `RUNVIL_FILES` on Windows                                      | The resolved path does not start with `/`                                                                      | The start is refused with the reason             | Reasoned           |
+| An article of at most 2000 characters                          | A second request, and a whole page of up to 40,000 characters in place of the article                          | A slower round: 60 s for 23,000 characters       | Seen in a real run |
+| A longer article that lacks what the operator asked for        | The model must ask for `raw` itself: 3 of 3 runs did with the system message, and 1 of 3 without it            | A wrong answer, or a reply that ends at the cap  | Seen in a real run |
+| A tool loop that does not converge                             | 24 rounds, the default cap of one `models.loop` call                                                           | The reply ends with a note, and the run goes on  | Seen in a real run |
+| A stop that finds no effect in flight                          | The Harness lowers the stop, and the reply goes on                                                             | The next Ctrl-C exits and leaves the run open    | Reasoned           |
+| A prompt that does not catch the stop                          | The dropped call's error ends the run canceled                                                                 | The run ends, and the next start is a new run    | Reasoned           |
+| A run in which the operator typed `/draw`                      | Each resume logs another number                                                                                | The resume is refused, and the journal is intact | Seen in a real run |
+| More than 1024 `log` lines in one run                          | The Engine refuses the next `log` call, and the prompt drops that note                                         | A draw or an early end shows no note             | Reasoned           |
+| Other header lines from `web/fetch`                            | The Lua tool finds no `extraction: readability` line                                                           | No second fetch, as before the Lua tool          | Reasoned           |
 | A line half typed when other output or the prompt is printed   | The terminal does not echo the first half again                                                                | The two halves are on two rows, live only        | Seen in a real run |
 | A reply with a line that starts with a role                    | Any line after the first of any reply; the text is printed as the model gave it                                | That line reads as another role's                | Reasoned           |
 
@@ -226,7 +262,12 @@ Steps 6 to 10 are open.
 
 - `crates/run-journal/src/session.rs` holds the cursor, the pairing, and the comparison.
 - `broker.rs`, `packs.rs`, and `timer.rs` in the same folder wrap the Host's broker, each Pack's factory, and the timer.
-- `Session::harness` keeps the run's control, which the replay needs for messages and stops.
+  Each wrapper claims its effect's record and gives the claim to `Shared::answer` (`session.rs` lines 320 to 353).
+  That one function waits for a stored answer's turn, raises the stop for a dropped answer, and holds a live effect until the replay ends.
+  It takes the live effect as a function, so a replayed effect never calls the Host's broker, Pack, or timer.
+  A render keeps its own match, because an answer it cannot read is rendered again at its turn (`packs.rs` lines 91 to 104).
+- `Session::harness` builds the `Host` over the wrapped Packs and timer, parses the launch's prompt, and keeps the run's control, which the replay needs for messages and stops.
+  The session hands out no `Host`, so a Host cannot build a `Harness` over those Packs that the replay does not control.
 - Covered by the tests of step 4.
 
 ### Step 4, done: each resume against an uninterrupted run
@@ -245,11 +286,12 @@ The journal must then hold the same records as the first run, and the resumed ru
 - A message that steered a round (line 230).
 - Two tasks, a timer that fires, a timer that is canceled, and the store (line 268).
 - A run that finishes (line 307).
+- A round in flight in another task, which must wait for the replay to end (line 331).
 
 ### Step 5, done: the command-line Host and `run.sh`
 
 - `crates/resumable/src/main.rs` resumes the journal's unfinished run or starts a new one, and reads the operator's lines from its input.
-- `crates/resumable/src/screen.rs` prints each message, reply, and tool result under its role, replayed or live: `user> `, `assistant> `, and `tool> ` with the tool's alias.
+- `crates/resumable/src/screen.rs` prints each message, reply, tool result, and `log` line under its role, replayed or live: `user> `, `assistant> `, `tool> ` with the tool's alias, and `note> `.
   When the input and the output are both a terminal, it prints `user> ` as a prompt when the run waits, and the terminal's own echo completes the line.
   A line typed before the run waits is printed again under `user> ` when the run takes it.
   In every other case the whole line is printed when its message arrives, so a replay and a pipe show the same text as a terminal.
@@ -289,17 +331,30 @@ The journal must then hold the same records as the first run, and the resumed ru
 ### Step 11, done: real files and web pages
 
 - `RUNVIL_FILES` names one directory.
-  `crates/resumable/src/main.rs` resolves it, mounts it read-only at its resolved path over the in-memory root, and makes it the run's first workspace root (lines 174 to 198).
-- The same file installs the web Pack with the runtime's handle and the Gateway's search (lines 210 to 231).
+  `crates/resumable/src/main.rs` resolves it, mounts it read-only at its resolved path over the in-memory root, and makes it the run's first workspace root (lines 197 to 221).
+- The same file installs the web Pack with the runtime's handle and the Gateway's search (lines 233 to 254).
   With no Gateway named, the Pack is unavailable, and a prompt that requires it is refused.
-- `prompts/agent.md` offers `std/read`, `std/dir`, `std/grep`, and `web/fetch`, and names the directory in a system message.
+- `prompts/agent.md` offers `std/read`, `std/dir`, `std/grep`, and `web_fetch`, its tool in Lua over `web/fetch`, and names the directory in its system message.
   It offers no `web/search`, because the Gateway answers a search only when its `gateway.toml` has `[tools.web_search]`.
 - `run.sh` makes `RUNVIL_FILES` absolute before it changes directory.
 - `run.sh` runs `prompts/agent.md` when no prompt is named (line 12), and mounts `~/Downloads` when `RUNVIL_FILES` is not set and that directory exists (lines 31 to 33).
 - `prompts/files.md` is removed.
   It offered the whole std Pack, which adds to the three tools of `prompts/agent.md` only the four that answer "not implemented".
-- Covered by `a_mounted_directory_is_read_only_at_its_own_path` (`crates/resumable/src/main.rs` line 292).
+- `prompts/chat.md` is removed.
+  Its loop was the last four lines of `prompts/agent.md` then, and no code or test read it.
+  The one prompt left declares `std` and `web`, so a run of it needs both Packs.
+- Covered by `a_mounted_directory_is_read_only_at_its_own_path` (`crates/resumable/src/main.rs` line 315).
   The library is unchanged.
+
+### Step 12, done: stop a reply, and keep the run when a reply ends early
+
+- `crates/resumable/src/main.rs` takes Ctrl-C through `tokio::signal`, a feature of `tokio` that brings `signal-hook-registry` into `Cargo.lock`.
+  The first Ctrl-C while the run works stops the round, and any other Ctrl-C leaves the run (lines 117 to 128).
+- `crates/resumable/src/screen.rs` shows each `log` line under `note> ` (lines 77 to 83).
+- `prompts/agent.md` calls `models.loop` under `pcall`, logs the code of a reply that ended early, and logs a draw for the line `/draw` (lines 42 to 53).
+- Covered by `a_journal_or_a_pipe_shows_each_block_under_its_role` for the note (`crates/resumable/src/screen.rs` line 152).
+  The Ctrl-C path has no test in the crate, and the runs under Verification cover it.
+  This step does not change the library.
 
 ## Verification
 
@@ -350,6 +405,46 @@ Run on 2026-11-18, for the defaults of `run.sh`:
 - With an empty `RUNVIL_PLUGINS`, `prompts/agent.md` was refused with "std is unavailable: runvil/std is not installed".
 - A person at a real terminal is not checked; a pipe gave every line above.
 
+Run on 2026-11-18, for the fetch tool of `prompts/agent.md`:
+
+- No Rust file changed.
+- The operator asked for the name and the place on `https://github.com/SomeoneToIgnore/`, which `https://api.github.com/users/SomeoneToIgnore` gives as Kirill Bulatov and Turku, Finland.
+- Before the change 0 of 3 runs named either, with the system message alone 2 of 3 named both, and with the Lua tool alone 3 of 3 did.
+- The prompt as it stands, with `~/Downloads` mounted, read a real file and then named both in 3 of 3 runs, in 79 to 90 s each.
+- Asked for the version on `https://www.rust-lang.org/`, whose article of 3118 characters lacks it, 3 of 3 runs answered 1.100.0.
+  With the Lua tool and no system message 1 of 3 did, and one run failed after 24 rounds with "tool-call loop did not converge".
+- A prompt with no model called the same Lua tool for 10 cases.
+  A thin article became the whole page, with and without `max_chars`.
+  A long article, a cut article, a `raw` call, a JSON body, and a 404 each returned as `web/fetch` gave them.
+  A text that is not a URL, a call with no URL, and a `raw` that is not a boolean each returned as text and did not raise.
+- The resume of one run replayed the Lua tool and its two calls of `web/fetch` in 2 s, with the same blocks on the screen.
+- Each count above is of 3 runs with one model, `Ornith-1.5-9B-Q4_K_M`.
+
+Run on 2026-11-18, for the tidy-up of the replay code:
+
+- `cargo clippy --workspace --all-targets` and `cargo test --workspace` pass, with 10 scenarios and 4 unit tests.
+- `cargo fmt --all --check` is not run, because `crates/resumable/src/main.rs` holds another change in progress.
+  `rustfmt --check` passes on the other seven files this change touched, and in `main.rs` it reports only `interrupts`, which is that other change.
+- The scenarios passed 60 times in a row.
+- Three deliberate breakages each failed a test: a broker called before its claim is answered, a dropped answer that raises no stop, and a live effect that does not wait for the replay to end.
+  The third failed no test before this change, and the new scenario covers it.
+- No run against a Gateway is checked for this change.
+
+Run on 2026-11-18, for step 12:
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, and `cargo test --workspace` pass, with 10 scenarios and 4 unit tests.
+- One deliberate breakage failed the test: a screen that drops `log` lines.
+- At a pseudo-terminal, Ctrl-C during a round printed the stop line and `note> the reply ended early: canceled`, the next line got its reply, and Ctrl-C at the prompt exited with code 130.
+  The resume of that run showed the same blocks.
+- With a signal in place of the key, a stop of a round and a stop of a `web/fetch` call inside the Lua tool each left one `Dropped` answer in the journal, and the resume of each showed the same blocks.
+- A run killed in a round resumed, asked the round again, stopped at one signal, and answered the next message.
+- A prompt that starts a slow fetch again after each drop took the stop at the first signal and exited with code 130 at the second.
+- With `max_tool_iterations: 1` in a copy of the prompt, a fetch ended with `note> the reply ended early: tool_loop_exhausted`, and the next message got its reply in the same run.
+- `/draw` printed `note> drawn: 851019`, the conversation went on, and the resume stopped at record 15 with both numbers named.
+- A scratch prompt that seeds from `sys.when` logged the same draws in three resumes, one of them with a new draw after a message, and another journal drew other numbers.
+- The operator's `agent.db` holds an open run that the `prompts/agent.md` of the commit before started, and its resume stops at record 5: the journal holds the Pack's `web/fetch` where the prompt now offers the Lua tool.
+- A person at a real terminal is not checked.
+
 ## Out of scope
 
 - The run's in-memory files and the shell session of the bashkit Pack.
@@ -375,3 +470,9 @@ Run on 2026-11-18, for the defaults of `run.sh`:
 - The std Plugin that Workshop pins answers `Write`, `StrReplace`, `Delete`, and `Glob` with "not implemented" (`runvil-plugin-std` at `782ad23e`, `crates/plugin-std/src/pack.rs` lines 97 to 102), so a prompt can list, read, and search, and cannot write.
 - The Gateway answers `POST /v1/tools/web_search` with 404 and "tool not configured: web_search" until its `gateway.toml` has `[tools.web_search]`.
 - A refused link is named by its path below the mount, as in "/link.txt escapes the mounted root", not by the path the model gave.
+- `web/fetch` keeps any article of 100 bytes or more, however small a part of the page it is: 235 of 12,466 characters for a GitHub profile, and 176 of 19,127 for the front page of `lobste.rs`.
+- The whole-page rendering of `web/fetch` includes the text of `script` and `style` elements: 23,325 characters for that profile, with the name at character 9,921, against 12,466 without them, with the name at character 17.
+  A scratch program measured both over `htmd` 0.5.6 and `readabilityrs` 0.1.4, the versions in `Cargo.lock`.
+- `tools.call` in Lua raises an invalid argument of `web/fetch` as a table with `kind`, `code`, and `message`, and returns a refused scheme or a 404 as text.
+- `sys.when` is text such as `2026-11-18T15:17:21.578Z`, so a prompt takes its digits to seed `math.randomseed`.
+- A terminal discards the output it has not yet shown when it takes Ctrl-C, so a script at a pseudo-terminal reads the screen before it sends the key.

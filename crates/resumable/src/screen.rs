@@ -74,6 +74,13 @@ impl Screen {
                     .unwrap_or_default();
                 self.block(&format!("tool> {alias}\n"));
             }
+            Some("lua") => {
+                let message = event
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                self.block(&format!("note> {message}\n"));
+            }
             Some("inbox_waiting") if main => {
                 self.waiting.send_replace(true);
             }
@@ -167,10 +174,21 @@ mod tests {
             json!({ "text": "from another task" }),
         )
         .await;
+        desk.event(
+            "lua",
+            "0",
+            json!({ "message": "the reply ended early: canceled" }),
+        )
+        .await;
 
         assert_eq!(
             desk.shown(),
-            "user> what is in the note?\ntool> read\nassistant> It says:\nship on Friday\n\n"
+            concat!(
+                "user> what is in the note?\n",
+                "tool> read\n",
+                "assistant> It says:\nship on Friday\n\n",
+                "note> the reply ended early: canceled\n",
+            )
         );
     }
 

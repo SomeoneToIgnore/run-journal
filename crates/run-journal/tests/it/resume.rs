@@ -326,3 +326,43 @@ async fn a_finished_run_is_closed_and_the_next_start_is_a_new_run() {
     );
     remove(&path);
 }
+
+#[tokio::test]
+async fn a_round_in_flight_in_another_task_waits_for_the_replay_to_end() {
+    let path = journal_path("in-flight-task");
+    let first = [Step::Wait(1), Step::Send("Hello."), Step::Wait(2)];
+    let second = [
+        Step::Event("task_succeeded", 2),
+        Step::Send("Again."),
+        Step::Wait(3),
+    ];
+    let whole = uninterrupted(
+        TASKS,
+        &[
+            Reply::Held("Slow answer."),
+            Reply::Text("Hello there."),
+            Reply::Text("Again there."),
+        ],
+        &[first.as_slice(), &[Step::Release], second.as_slice()].concat(),
+    )
+    .await;
+
+    let replies = [Reply::Stuck, Reply::Text("Hello there.")];
+    let phase = Phase::journaled(&path, TASKS, &replies).await;
+    phase.play(&first).await;
+    let before = phase.cut().await;
+    assert_eq!(before.requests.len(), 2);
+
+    let replies = [Reply::Text("Slow answer."), Reply::Text("Again there.")];
+    let phase = Phase::journaled(&path, TASKS, &replies).await;
+    phase.replayed().await;
+    phase.play(&second).await;
+    let after = phase.cut().await;
+
+    assert_eq!(
+        after.requests,
+        [whole.requests[0].clone(), whole.requests[2].clone()]
+    );
+    assert_eq!(journal(&path).await, whole.records);
+    remove(&path);
+}

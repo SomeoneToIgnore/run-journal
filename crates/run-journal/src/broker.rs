@@ -1,4 +1,3 @@
-use std::future::pending;
 use std::sync::Arc;
 
 use runvil::effect::Round;
@@ -9,7 +8,7 @@ use runvil::model::{
 use runvil::{BoxFuture, Error};
 
 use crate::answer;
-use crate::session::{Claim, Shared};
+use crate::session::Shared;
 
 pub(crate) struct JournalBroker {
     shared: Arc<Shared>,
@@ -38,31 +37,11 @@ impl InferenceBroker for JournalBroker {
         let shared = Arc::clone(&self.shared);
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
-            match shared.claim_round(round.id.get()) {
-                Claim::Stored {
-                    turn,
-                    payload,
-                    answer,
-                } => {
-                    shared.turn(turn).await;
-                    answer::chat(answer.as_ref(), &payload)
-                }
-                Claim::Dropped { turn } => {
-                    shared.turn(turn).await;
-                    shared.stop();
-                    pending().await
-                }
-                Claim::Live { key } => {
-                    if !shared.replayed().await {
-                        pending::<()>().await;
-                    }
-                    let result = inner.chat(binding, messages, tools, options, round).await;
-                    if let Some(key) = key {
-                        shared.stash(key, answer::of_chat(&result));
-                    }
-                    result
-                }
-            }
+            let claim = shared.claim_round(round.id.get());
+            let live = || inner.chat(binding, messages, tools, options, round);
+            shared
+                .answer(claim, answer::chat, live, answer::of_chat)
+                .await
         })
     }
 }

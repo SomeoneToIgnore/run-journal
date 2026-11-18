@@ -1,4 +1,3 @@
-use std::future::pending;
 use std::sync::Arc;
 
 use runvil::packs::PackId;
@@ -7,7 +6,7 @@ use runvil::{BoxFuture, Error, ToolInfo, ToolOutput};
 use serde_json::Value;
 
 use crate::answer;
-use crate::session::{Claim, Rendered, Shared};
+use crate::session::{Rendered, Shared};
 
 pub(crate) fn wrap(shared: &Arc<Shared>, registry: PackRegistry) -> Result<PackRegistry, Error> {
     let builtin = registry
@@ -75,31 +74,11 @@ impl Pack for JournalPack {
                 args.clone(),
                 serde_json::to_value(cx.origin()).unwrap_or_default(),
             ]));
-            match self.shared.claim_call(&call) {
-                Claim::Stored {
-                    turn,
-                    payload,
-                    answer,
-                } => {
-                    self.shared.turn(turn).await;
-                    answer::tool(answer.as_ref(), &payload)
-                }
-                Claim::Dropped { turn } => {
-                    self.shared.turn(turn).await;
-                    self.shared.stop();
-                    pending().await
-                }
-                Claim::Live { key } => {
-                    if !self.shared.replayed().await {
-                        pending::<()>().await;
-                    }
-                    let result = self.inner.call(cx, args).await;
-                    if let Some(key) = key {
-                        self.shared.stash(key, answer::of_tool(&result));
-                    }
-                    result
-                }
-            }
+            let claim = self.shared.claim_call(&call);
+            let live = || self.inner.call(cx, args);
+            self.shared
+                .answer(claim, answer::tool, live, answer::of_tool)
+                .await
         })
     }
 
@@ -119,9 +98,7 @@ impl Pack for JournalPack {
                     self.inner.render(cx, offered).await
                 }
                 Rendered::Live => {
-                    if !self.shared.replayed().await {
-                        pending::<()>().await;
-                    }
+                    self.shared.live().await;
                     self.inner.render(cx, offered).await
                 }
             }
