@@ -19,6 +19,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 turso = { version = "=0.7.2", default-features = false }
 
+[patch."https://github.com/cppalliance/runvil-harness"]
+runvil = { path = "../runvil-harness-journal/crates/runvil" }
+harness-gateway-client = { path = "../runvil-harness-journal/crates/harness-gateway-client" }
+plugin-web = { path = "../runvil-harness-journal/crates/plugin-web" }
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

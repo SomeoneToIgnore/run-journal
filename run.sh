@@ -22,7 +22,9 @@ if [ -z "${RUNVIL_GATEWAY_URL:-}" ]; then
     export RUNVIL_GATEWAY_API_KEY="${url#*key=}"
 fi
 
-if [ -z "${RUNVIL_PLUGINS+set}" ] && [ -d "$WORKSHOP/plugins" ]; then
+if [ -z "${RUNVIL_PLUGINS+set}" ] && [ -d "$WORKSHOP/plugins-contract-0.4" ]; then
+    export RUNVIL_PLUGINS="$WORKSHOP/plugins-contract-0.4"
+elif [ -z "${RUNVIL_PLUGINS+set}" ] && [ -d "$WORKSHOP/plugins" ]; then
     export RUNVIL_PLUGINS="$WORKSHOP/plugins"
 elif [ -z "${RUNVIL_PLUGINS:-}" ]; then
     unset RUNVIL_PLUGINS

@@ -366,3 +366,34 @@ async fn a_round_in_flight_in_another_task_waits_for_the_replay_to_end() {
     assert_eq!(journal(&path).await, whole.records);
     remove(&path);
 }
+
+#[tokio::test]
+async fn a_resumed_run_guards_tool_output_with_the_nonce_it_began_with() {
+    let path = journal_path("nonce");
+    let replies = [
+        Reply::Read,
+        Reply::Text("The notes say to ship on Friday."),
+        Reply::Text("On Friday."),
+    ];
+
+    let phase = Phase::journaled(&path, DESK, &replies[..2]).await;
+    phase
+        .play(&[
+            Step::Wait(1),
+            Step::Send("What do the notes say?"),
+            Step::Wait(2),
+        ])
+        .await;
+    let before = phase.cut().await;
+    assert_eq!(before.nonces.len(), 1);
+
+    let phase = Phase::journaled(&path, DESK, &replies[2..]).await;
+    phase.replayed().await;
+    phase
+        .play(&[Step::Send("When do we ship?"), Step::Wait(3)])
+        .await;
+    let after = phase.cut().await;
+
+    assert_eq!(after.nonces, before.nonces);
+    remove(&path);
+}

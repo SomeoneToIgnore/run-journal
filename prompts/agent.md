@@ -11,6 +11,7 @@ uses:
 ## Conversation
 
 ```lua
+-- TODO kb should not need anything like this, if it's not working, need to fix the tool
 local page = tools.get('web/fetch')
 local function call(arguments)
   local ok, answer = pcall(tools.call, page, arguments)
@@ -38,6 +39,12 @@ local root = ui().workspace_root
 if root then
   guide = 'The directory ' .. root .. ' holds real files, mounted read-only. Give every tool an absolute path. ' .. guide
 end
+-- TODO kb this can get duplicated in a DB — ask Claude to look at the engine and look for the duplicated data
+-- consider compressing the DB data
+
+
+-- TODO kb get even smaller model
+-- generally, make my work fast, if I wait on something this is bad
 messages:system(guide)
 while true do
   local text = tasks.receive()

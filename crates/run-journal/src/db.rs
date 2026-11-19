@@ -19,6 +19,14 @@ pub(crate) struct RunRow {
     pub(crate) launch: Launch,
     pub(crate) started_at: Timestamp,
     pub(crate) ended: bool,
+    seed: String,
+}
+
+impl RunRow {
+    pub(crate) fn seed(&self) -> Result<RunSeed, JournalError> {
+        serde_json::from_value::<RunSeed>(Value::String(self.seed.clone()))
+            .map_err(|error| JournalError::Corrupt(format!("expected a run seed: {error}")))
+    }
 }
 
 pub(crate) struct Stored {
@@ -195,11 +203,11 @@ const UPDATE_RUN_ENDED: &str = "UPDATE runs SET \
     WHERE run_id = ?1 AND ended_at IS NULL";
 
 const SELECT_LATEST_RUN: &str = "SELECT \
-    run_id, prompt, args, model, started_at, ended_at \
+    run_id, prompt, args, model, started_at, ended_at, seed \
     FROM runs ORDER BY run_id DESC LIMIT 1";
 
 const SELECT_RUN: &str = "SELECT \
-    run_id, prompt, args, model, started_at, ended_at \
+    run_id, prompt, args, model, started_at, ended_at, seed \
     FROM runs WHERE run_id = ?1";
 
 const SELECT_RECORDS: &str = "SELECT \
@@ -216,6 +224,7 @@ fn run_row(row: &turso::Row) -> Result<RunRow, JournalError> {
         },
         started_at: Timestamp::from_unix_millis(row.get::<i64>(4)?),
         ended: row.get::<Option<i64>>(5)?.is_some(),
+        seed: row.get::<String>(6)?,
     })
 }
 

@@ -105,6 +105,7 @@ pub(crate) enum Step {
 pub(crate) struct Outcome {
     pub(crate) records: Vec<Shown>,
     pub(crate) requests: Vec<Vec<String>>,
+    pub(crate) nonces: Vec<String>,
     pub(crate) reads: usize,
 }
 
@@ -305,6 +306,7 @@ struct Script {
     catalog: Option<ModelCatalog>,
     replies: Mutex<VecDeque<Reply>>,
     requests: Mutex<Vec<Vec<String>>>,
+    nonces: Mutex<Vec<String>>,
     started: watch::Sender<usize>,
     released: watch::Sender<bool>,
 }
@@ -322,6 +324,7 @@ impl Script {
             catalog: listed.then(|| ModelCatalog::new([model]).unwrap()),
             replies: Mutex::new(replies.iter().copied().collect::<VecDeque<_>>()),
             requests: Mutex::new(Vec::new()),
+            nonces: Mutex::new(Vec::new()),
             started: watch::Sender::new(0),
             released: watch::Sender::new(false),
         }
@@ -342,9 +345,20 @@ impl InferenceBroker for Script {
         _options: CompletionOptions,
         _round: Round,
     ) -> BoxFuture<'static, Result<Box<Completion>, Error>> {
-        let request = messages
+        let shown = messages
             .iter()
-            .map(|message| scrub(&format!("{message:?}")))
+            .map(|message| format!("{message:?}"))
+            .collect::<Vec<_>>();
+        let mut seen = self.nonces.lock().unwrap();
+        for nonce in shown.iter().flat_map(|message| nonces(message)) {
+            if !seen.contains(&nonce) {
+                seen.push(nonce);
+            }
+        }
+        drop(seen);
+        let request = shown
+            .iter()
+            .map(|message| scrub(message))
             .collect::<Vec<_>>();
         self.requests.lock().unwrap().push(request);
         let reply = self.replies.lock().unwrap().pop_front();
@@ -544,6 +558,7 @@ fn outcome(tee: &Tee, script: &Script, reads: &AtomicUsize) -> Outcome {
             .map(shown)
             .collect::<Vec<_>>(),
         requests: script.requests.lock().unwrap().clone(),
+        nonces: script.nonces.lock().unwrap().clone(),
         reads: reads.load(Ordering::SeqCst),
     }
 }
@@ -562,19 +577,30 @@ fn scrub(text: &str) -> String {
     let mut scrubbed = pieces.next().unwrap_or_default().to_owned();
     for piece in pieces {
         scrubbed.push_str(GUARD);
-        let nonce = piece
-            .chars()
-            .take(32)
-            .take_while(|digit| digit.is_ascii_hexdigit() && !digit.is_ascii_uppercase())
-            .count();
-        if nonce == 32 {
+        if let Some(nonce) = nonce(piece) {
             scrubbed.push_str("<nonce>");
-            scrubbed.push_str(&piece[32..]);
+            scrubbed.push_str(&piece[nonce.len()..]);
         } else {
             scrubbed.push_str(piece);
         }
     }
     scrubbed
+}
+
+fn nonces(text: &str) -> Vec<String> {
+    text.split(GUARD)
+        .skip(1)
+        .filter_map(nonce)
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+}
+
+fn nonce(piece: &str) -> Option<&str> {
+    piece.get(..32).filter(|nonce| {
+        nonce
+            .chars()
+            .all(|digit| digit.is_ascii_hexdigit() && !digit.is_ascii_uppercase())
+    })
 }
 
 async fn within<Output>(future: impl Future<Output = Output>) -> Output {

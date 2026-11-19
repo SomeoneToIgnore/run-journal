@@ -352,8 +352,9 @@ The journal must then hold the same records as the first run, and the resumed ru
   The first Ctrl-C while the run works stops the round, and any other Ctrl-C leaves the run (lines 117 to 128).
 - `crates/resumable/src/screen.rs` shows each `log` line under `note> ` (lines 77 to 83).
 - `prompts/agent.md` calls `models.loop` under `pcall`, logs the code of a reply that ended early, and logs a draw for the line `/draw` (lines 42 to 53).
-- Covered by `a_journal_or_a_pipe_shows_each_block_under_its_role` for the note (`crates/resumable/src/screen.rs` line 152).
-  The Ctrl-C path has no test in the crate, and the runs under Verification cover it.
+- The screen and the Ctrl-C path have no test in the crate, and the runs under Verification cover them.
+  The two tests of `screen.rs` are removed: they sent the screen events that the tests built themselves, and one of them also wrote the terminal's echo into the output it then compared.
+  So they checked the screen against its own picture of the Harness and of a terminal, and a run at a pseudo-terminal checks it against both.
   This step does not change the library.
 
 ## Verification
@@ -444,6 +445,11 @@ Run on 2026-11-18, for step 12:
 - A scratch prompt that seeds from `sys.when` logged the same draws in three resumes, one of them with a new draw after a message, and another journal drew other numbers.
 - The operator's `agent.db` holds an open run that the `prompts/agent.md` of the commit before started, and its resume stops at record 5: the journal holds the Pack's `web/fetch` where the prompt now offers the Lua tool.
 - A person at a real terminal is not checked.
+
+Run on 2026-11-18, for the removal of the screen's tests:
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, and `cargo test --workspace` pass, with 10 scenarios and 2 unit tests.
+- No run is checked again: the change removes test code only.
 
 ## Out of scope
 

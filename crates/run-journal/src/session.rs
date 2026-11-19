@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use runvil::harness::{InferenceBroker, Packs, Record, RecordKind, RunId, Timer};
 use runvil::plugin::PackRegistry;
-use runvil::{Error, Harness, Host, PromptFinder, RunControl, RunSetup, Timestamp, ToolInfo};
+use runvil::{
+    Error, Harness, Host, PromptFinder, RunControl, RunSeed, RunSetup, Timestamp, ToolInfo,
+};
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::watch;
@@ -35,6 +37,7 @@ impl Session {
         RunSetup {
             args: self.shared.launch.args.clone(),
             selected_model: self.shared.launch.model.clone(),
+            seed: self.shared.seed,
             ..RunSetup::new(
                 Arc::new(JournalRecorder::new(Arc::clone(&self.shared))),
                 Arc::new(JournalBroker::new(Arc::clone(&self.shared), broker)),
@@ -70,9 +73,14 @@ impl Session {
     }
 
     pub(crate) fn new(db: Arc<AsyncMutex<Db>>, launch: Launch, resumed: Option<Resumed>) -> Self {
-        let (run, started_at, old) = match resumed {
-            Some(resumed) => (Some(resumed.run), Some(resumed.started_at), resumed.records),
-            None => (None, None, Vec::new()),
+        let (run, started_at, seed, old) = match resumed {
+            Some(resumed) => (
+                Some(resumed.run),
+                Some(resumed.started_at),
+                Some(resumed.seed),
+                resumed.records,
+            ),
+            None => (None, None, None, Vec::new()),
         };
         let old = old
             .into_iter()
@@ -98,6 +106,7 @@ impl Session {
             shared: Arc::new(Shared {
                 db,
                 launch,
+                seed,
                 progress,
                 state: Mutex::new(State {
                     run,
@@ -131,12 +140,14 @@ impl fmt::Debug for Session {
 pub(crate) struct Resumed {
     pub(crate) run: i64,
     pub(crate) started_at: Timestamp,
+    pub(crate) seed: RunSeed,
     pub(crate) records: Vec<Stored>,
 }
 
 pub(crate) struct Shared {
     pub(crate) db: Arc<AsyncMutex<Db>>,
     pub(crate) launch: Launch,
+    seed: Option<RunSeed>,
     progress: watch::Sender<Progress>,
     state: Mutex<State>,
 }

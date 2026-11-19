@@ -56,6 +56,7 @@ impl Journal {
         if row.ended {
             return Err(JournalError::RunEnded(row.id));
         }
+        let seed = row.seed()?;
         let records = db.records(row.id).await?;
         drop(db);
         Ok(Session::new(
@@ -64,6 +65,7 @@ impl Journal {
             Some(Resumed {
                 run: row.id,
                 started_at: row.started_at,
+                seed,
                 records,
             }),
         ))
